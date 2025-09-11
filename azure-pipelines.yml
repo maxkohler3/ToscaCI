@@ -6,8 +6,8 @@ pool:
 variables:
   # You can keep these here or set them in the pipeline UI
   ToscaServerUrl: 'http://localhost:80'    # NO trailing slash
-  ToscaProjectRoot: 'E2GDemo'              # Tosca Project Root name
-  Events: '["DEX Test"]'                   # stringified JSON array (names or UniqueIds)
+  ToscaProjectRoot: 'MK_Shared'              # Tosca Project Root name
+  Events: '["TC1 Demo Dex"]'                   # stringified JSON array (names or UniqueIds)
   # TargetAgentHost: 'YOUR_AGENT_HOSTNAME' # <-- set this with characteristics assigned to specific machines
 steps:
   - task: PowerShell@2
