@@ -1,25 +1,70 @@
-# Starter pipeline
-# Start with a minimal pipeline that you can customize to build and deploy your code.
-# Add steps that build, run tests, deploy, and more:
-# https://aka.ms/yaml
-
-trigger:
-- main
-
+trigger: none  # running manually for demo purposes
 pool:
-  name: Default
-
+  name: 'Default'            # self-hosted pool
+  demands:
+  - Agent.OS -equals Windows_NT
+variables:
+  # You can keep these here or set them in the pipeline UI
+  ToscaServerUrl: 'http://localhost:80'    # NO trailing slash
+  ToscaProjectRoot: 'E2GDemo'              # Tosca Project Root name
+  Events: '["DEX Test"]'                   # stringified JSON array (names or UniqueIds)
+  # TargetAgentHost: 'YOUR_AGENT_HOSTNAME' # <-- set this with characteristics assigned to specific machines
 steps:
-- powershell: |
-- task: PowerShell@2
-  displayName: Run Tosca test(s) via ToscaCIClient
-  inputs:
-    targetType: 'filePath'
-    #filePath: $(System.DefaultWorkingDirectory)\tests\run-tosca-test.ps1
-    filePath: "C:/temp/AOS/tosca_execution_client.ps1"
-    arguments: >
-      -toscaServerUrl "http://192.168.222.132:5012/"
-      -events '["3a02539f-f9e8-856c-4a85-6dc1060d65e3"]'
-      -projectName "DEX_User"
-      -creator "AOS API"
-      -debug "true"
+  - task: PowerShell@2
+    displayName: 'Download Tosca Execution Client'
+    inputs:
+      targetType: 'inline'
+      script: |
+        $uri = 'https://raw.githubusercontent.com/Tricentis/ToscaExecutionClient/main/tosca_execution_client.ps1'
+        Invoke-WebRequest -Uri $uri -OutFile tosca_execution_client.ps1
+        Unblock-File .\tosca_execution_client.ps1
+  - task: PowerShell@2
+    displayName: 'Run Tosca TestEvent(s) via DEX'
+    inputs:
+      targetType: 'inline'
+      script: |
+        $results = "$(Build.SourcesDirectory)\tosca_results"
+        New-Item -ItemType Directory -Path $results -Force | Out-Null
+        # hashtable of named parameters
+        $p = @{
+          toscaServerUrl       = "$(ToscaServerUrl)"
+          projectName          = "$(ToscaProjectRoot)"
+          events               = '$(Events)'
+          resultsFolderPath    = $results
+          resultsFileName      = "junit.xml"
+          clientTimeout        = 7200
+          creator              = "ADO Pipeline"
+          executionEnvironment = "Dex"
+        }
+        # Add OAuth (using HTTP for demo so not needed)
+        if ($env:TuaClientId -and $env:TuaClientSecret) {
+          $p.clientId     = $env:TuaClientId
+          $p.clientSecret = $env:TuaClientSecret
+        }
+        # Optional: echo bound args (sans secret) for sanity
+        $safe = $p.Clone(); $null = $safe.Remove('clientSecret')
+        Write-Host "ToscaExecutionClient arguments:`n$($safe.GetEnumerator() | ForEach-Object { "$($_.Key) = $($_.Value)" } | Out-String)"
+        # Run the client
+        .\tosca_execution_client.ps1 @p
+        if ($LASTEXITCODE -ne 0) { throw "Tosca Execution Client exit code $LASTEXITCODE" }
+        # Fail the run if tests failed (results are JUnit)
+        [xml]$j = Get-Content "$results\junit.xml"
+        $failCount = [int]($j.testsuite.failures + $j.testsuite.errors)
+        if ($failCount -gt 0) { Write-Error "Tosca reported $failCount failing tests." }
+    env:
+      # Leave these unset for plain HTTP unless your server requires OAuth
+      TuaClientId: $(TuaClientId)
+      TuaClientSecret: $(TuaClientSecret)
+  - task: PublishTestResults@2
+    displayName: 'Publish JUnit results to ADO'
+    inputs:
+      testResultsFormat: 'JUnit'
+      testResultsFiles: '$(Build.SourcesDirectory)\tosca_results\junit.xml'
+      failTaskOnFailedTests: true
+      testRunTitle: 'Tosca DEX run'
+  - task: PublishBuildArtifacts@1
+    displayName: 'Publish Tosca logs/artifacts'
+    condition: succeededOrFailed()
+    inputs:
+      PathtoPublish: '$(Build.SourcesDirectory)\tosca_results'
+      ArtifactName: 'tosca-results'
