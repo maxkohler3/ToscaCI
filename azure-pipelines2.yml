@@ -1,0 +1,70 @@
+trigger:
+  branches:
+    include:
+      - main
+
+pool:
+  vmImage: 'windows-latest'
+
+variables:
+  PLAYLIST_ID: '1f5c451b-5cc3-4d6d-9113-4a77cb8883b4'
+  TOSCA_BASE_URL: 'https://tricentis.my.tricentis.com/tosca/api'
+  TOSCA_TOKEN: $(TOSCA_TOKEN)   # Stored securely in Azure DevOps Library
+
+steps:
+
+# --- Trigger Tosca Cloud Playlist ---
+- task: PowerShell@2
+  displayName: "Trigger Tosca Cloud Playlist Execution"
+  inputs:
+    targetType: inline
+    script: |
+      $playlistId = "$(PLAYLIST_ID)"
+      $apiUrl = "$(TOSCA_BASE_URL)/executions/playlists/$playlistId/run"
+
+      Write-Host "Triggering Tosca playlist: $playlistId"
+      
+      $headers = @{
+        "Authorization" = "Bearer $(TOSCA_TOKEN)"
+        "Content-Type"  = "application/json"
+      }
+
+      $body = @{
+        "executionConfiguration" = @{
+          "executionName" = "Azure DevOps Trigger - $(Build.BuildNumber)"
+        }
+      } | ConvertTo-Json
+
+      $response = Invoke-RestMethod -Uri $apiUrl -Method Post -Headers $headers -Body $body
+
+      Write-Host "Execution started. Execution ID:"
+      Write-Host $response.id
+
+      # Store execution ID for later steps
+      Write-Host "##vso[task.setvariable variable=TOSCA_EXECUTION_ID]$($response.id)"
+
+# --- Poll Status until Execution is Finished ---
+- task: PowerShell@2
+  displayName: "Check Tosca Execution Status"
+  inputs:
+    targetType: inline
+    script: |
+      $executionId = "$(TOSCA_EXECUTION_ID)"
+      $statusUrl = "$(TOSCA_BASE_URL)/executions/$executionId"
+      $headers = @{
+        "Authorization" = "Bearer $(TOSCA_TOKEN)"
+      }
+
+      Write-Host "Checking execution status for ID: $executionId"
+
+      do {
+        $result = Invoke-RestMethod -Uri $statusUrl -Method Get -Headers $headers
+        Write-Host "Current status: $($result.status)"
+        Start-Sleep -Seconds 10
+      } while ($result.status -in @("Queued", "Running"))
+
+      Write-Host "Final execution status: $($result.status)"
+
+      if ($result.status -ne "Passed") {
+        Write-Error "Tosca Execution failed or had issues."
+      }
